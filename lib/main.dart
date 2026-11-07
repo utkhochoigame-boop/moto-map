@@ -1,8 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:vector_map_tiles/vector_map_tiles.dart';
+import 'package:vector_map_tiles_pmtiles/vector_map_tiles_pmtiles.dart';
+
+const mapUrl =
+    'https://github.com/utkhochoigame-boop/moto-map/releases/download/map-data/vietnam.pmtiles';
 
 void main() => runApp(const MotoMapApp());
 
@@ -14,19 +21,159 @@ class MotoMapApp extends StatelessWidget {
       title: 'Moto Map',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: Colors.orange, useMaterial3: true),
-      home: const MapPage(),
+      home: const Gate(),
+    );
+  }
+}
+
+class Gate extends StatefulWidget {
+  const Gate({super.key});
+  @override
+  State<Gate> createState() => _GateState();
+}
+
+class _GateState extends State<Gate> {
+  String? _path;
+  bool _checking = true;
+  bool _downloading = false;
+  double _progress = 0;
+  int _gotMb = 0;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  Future<File> _file() async {
+    final dir = await getApplicationSupportDirectory();
+    return File('${dir.path}/vietnam.pmtiles');
+  }
+
+  Future<void> _check() async {
+    final f = await _file();
+    final ok = await f.exists() && await f.length() > 100 * 1024 * 1024;
+    if (!mounted) return;
+    setState(() {
+      _checking = false;
+      if (ok) _path = f.path;
+    });
+  }
+
+  Future<void> _download() async {
+    setState(() {
+      _downloading = true;
+      _error = null;
+      _progress = 0;
+      _gotMb = 0;
+    });
+    final client = HttpClient();
+    try {
+      final f = await _file();
+      final req = await client.getUrl(Uri.parse(mapUrl));
+      final res = await req.close();
+      if (res.statusCode != 200) {
+        throw 'Máy chủ trả về mã ${res.statusCode}';
+      }
+      final total = res.contentLength;
+      final part = File('${f.path}.part');
+      final sink = part.openWrite();
+      var got = 0;
+      var lastUi = 0;
+      await for (final chunk in res) {
+        sink.add(chunk);
+        got += chunk.length;
+        if (got - lastUi > 2 * 1024 * 1024) {
+          lastUi = got;
+          if (mounted) {
+            setState(() {
+              _gotMb = got ~/ (1024 * 1024);
+              _progress = total > 0 ? got / total : 0;
+            });
+          }
+        }
+      }
+      await sink.flush();
+      await sink.close();
+      if (await f.exists()) await f.delete();
+      await part.rename(f.path);
+      if (mounted) {
+        setState(() {
+          _path = f.path;
+          _downloading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Tải lỗi: $e';
+          _downloading = false;
+        });
+      }
+    } finally {
+      client.close();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_checking) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (_path != null) return MapPage(path: _path!);
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.map, size: 72),
+              const SizedBox(height: 16),
+              const Text('Tải bản đồ Việt Nam để dùng offline',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center),
+              const SizedBox(height: 8),
+              const Text(
+                  'Dung lượng khoảng 883 MB. Nên dùng wifi, giữ màn hình sáng và để app mở cho đến khi tải xong.',
+                  textAlign: TextAlign.center),
+              const SizedBox(height: 24),
+              if (_downloading) ...[
+                LinearProgressIndicator(value: _progress > 0 ? _progress : null),
+                const SizedBox(height: 8),
+                Text('Đã tải $_gotMb MB'
+                    '${_progress > 0 ? ' (${(_progress * 100).round()}%)' : ''}'),
+              ] else
+                FilledButton.icon(
+                  onPressed: _download,
+                  icon: const Icon(Icons.download),
+                  label: const Text('Tải bản đồ'),
+                ),
+              if (_error != null) ...[
+                const SizedBox(height: 16),
+                Text(_error!, style: const TextStyle(color: Colors.red)),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
 
 class MapPage extends StatefulWidget {
-  const MapPage({super.key});
+  final String path;
+  const MapPage({super.key, required this.path});
   @override
   State<MapPage> createState() => _MapPageState();
 }
 
 class _MapPageState extends State<MapPage> {
   final MapController _controller = MapController();
+  late final Future<PmTilesVectorTileProvider> _provider =
+      PmTilesVectorTileProvider.fromSource(widget.path);
+  final _theme = ProtomapsThemes.light();
   StreamSubscription<Position>? _sub;
   LatLng? _me;
   bool _followed = false;
@@ -35,6 +182,9 @@ class _MapPageState extends State<MapPage> {
   @override
   void initState() {
     super.initState();
+    _provider.then((_) {}, onError: (e) {
+      if (mounted) setState(() => _status = 'Lỗi đọc bản đồ: $e');
+    });
     _startLocation();
   }
 
@@ -63,11 +213,11 @@ class _MapPageState extends State<MapPage> {
       final point = LatLng(p.latitude, p.longitude);
       setState(() {
         _me = point;
-        _status = 'Độ chính xác ~${p.accuracy.round()} m';
+        _status = 'Bản đồ offline | GPS ~${p.accuracy.round()} m';
       });
       if (!_followed) {
         _followed = true;
-        _controller.move(point, 16);
+        _controller.move(point, 15);
       }
     });
   }
@@ -88,11 +238,18 @@ class _MapPageState extends State<MapPage> {
             options: const MapOptions(
               initialCenter: LatLng(16.0, 106.0),
               initialZoom: 5.5,
+              maxZoom: 18,
             ),
             children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.utkho.moto_map',
+              FutureBuilder<PmTilesVectorTileProvider>(
+                future: _provider,
+                builder: (context, snap) {
+                  if (!snap.hasData) return const SizedBox.shrink();
+                  return VectorTileLayer(
+                    theme: _theme,
+                    tileProviders: TileProviders({'protomaps': snap.data!}),
+                  );
+                },
               ),
               if (_me != null)
                 MarkerLayer(markers: [
