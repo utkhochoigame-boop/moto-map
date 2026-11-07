@@ -29,6 +29,11 @@ jobs:
       - name: Add permissions
         run: |
           sed -i 's#<application#<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>\n    <uses-permission android:name="android.permission.INTERNET"/>\n    <application#' app/android/app/src/main/AndroidManifest.xml
+      - name: Keep same signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: debug-keystore-v1
       - name: Build APK
         working-directory: app
         run: |
