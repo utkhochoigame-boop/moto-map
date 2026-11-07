@@ -1,7 +1,7 @@
 name: moto_map
 description: Ban do xe may offline
 publish_to: "none"
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -12,6 +12,9 @@ dependencies:
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
   geolocator: ^13.0.1
+  path_provider: ^2.1.4
+  vector_map_tiles: ^8.0.0
+  vector_map_tiles_pmtiles: ^1.5.0
 
 flutter:
   uses-material-design: true
