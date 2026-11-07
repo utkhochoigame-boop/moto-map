@@ -15,7 +15,6 @@ dependencies:
   path_provider: ^2.1.4
   vector_map_tiles: ^8.0.0
   vector_map_tiles_pmtiles: ^1.5.0
-  vector_tile_renderer: any
 
 flutter:
   uses-material-design: true
