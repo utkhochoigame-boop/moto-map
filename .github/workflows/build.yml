@@ -37,8 +37,14 @@ jobs:
       - name: Build APK
         working-directory: app
         run: |
+          set -o pipefail
           flutter pub get
-          flutter build apk --release
+          flutter build apk --release 2>&1 | tee ../build.log
+      - name: Show errors
+        if: failure()
+        run: |
+          echo "===== CAC DONG LOI ====="
+          grep -n -i -E "error|what went wrong|execution failed|because|version solving" build.log | head -60 || true
       - name: Publish APK
         uses: softprops/action-gh-release@v2
         with:
