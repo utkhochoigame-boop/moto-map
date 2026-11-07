@@ -53,7 +53,7 @@ class _GateState extends State<Gate> {
 
   Future<void> _check() async {
     final f = await _file();
-    final ok = await f.exists() && await f.length() > 100 * 1024 * 1024;
+    final ok = await f.exists() && await f.length() > 20 * 1024 * 1024;
     if (!mounted) return;
     setState(() {
       _checking = false;
@@ -131,12 +131,12 @@ class _GateState extends State<Gate> {
             children: [
               const Icon(Icons.map, size: 72),
               const SizedBox(height: 16),
-              const Text('Tải bản đồ Việt Nam để dùng offline',
+              const Text('Tải bản đồ miền Nam để dùng offline',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                   textAlign: TextAlign.center),
               const SizedBox(height: 8),
               const Text(
-                  'Dung lượng khoảng 883 MB. Nên dùng wifi, giữ màn hình sáng và để app mở cho đến khi tải xong.',
+                  'Dung lượng vài trăm MB. Nên dùng wifi, giữ màn hình sáng và để app mở cho đến khi tải xong.',
                   textAlign: TextAlign.center),
               const SizedBox(height: 24),
               if (_downloading) ...[
@@ -236,8 +236,8 @@ class _MapPageState extends State<MapPage> {
           FlutterMap(
             mapController: _controller,
             options: const MapOptions(
-              initialCenter: LatLng(16.0, 106.0),
-              initialZoom: 5.5,
+              initialCenter: LatLng(10.8, 106.7),
+              initialZoom: 8,
               maxZoom: 18,
             ),
             children: [
