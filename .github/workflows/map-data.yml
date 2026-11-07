@@ -26,9 +26,12 @@ jobs:
             fi
           done
           ls -lh vietnam.pmtiles
-      - name: Upload to release
+          - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          ls -lh vietnam.pmtiles
           gh release delete map-data --yes --cleanup-tag || true
           gh release create map-data vietnam.pmtiles --title "Vietnam map data" --notes "Offline map for the app"
+
