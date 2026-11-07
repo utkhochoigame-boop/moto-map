@@ -8,6 +8,8 @@ import 'package:latlong2/latlong.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:vector_map_tiles/vector_map_tiles.dart';
 import 'package:vector_map_tiles_pmtiles/vector_map_tiles_pmtiles.dart';
+import 'package:vector_tile_renderer/vector_tile_renderer.dart'
+    show ThemeReader;
 
 const mapUrl =
     'https://github.com/utkhochoigame-boop/moto-map/releases/download/map-data/vietnam.pmtiles';
@@ -21,25 +23,25 @@ const _styleJson = r'''
   "layers": [
     {"id":"bg","type":"background","paint":{"background-color":"#f3f0e8"}},
     {"id":"earth","type":"fill","source":"protomaps","source-layer":"earth","paint":{"fill-color":"#f3f0e8"}},
-    {"id":"forest","type":"fill","source":"protomaps","source-layer":"landcover","filter":["==",["get","kind"],"forest"],"paint":{"fill-color":"#dcebd2"}},
-    {"id":"park","type":"fill","source":"protomaps","source-layer":"landuse","filter":["==",["get","kind"],"park"],"paint":{"fill-color":"#d3e8c8"}},
+    {"id":"forest","type":"fill","source":"protomaps","source-layer":"landcover","filter":["==","kind","forest"],"paint":{"fill-color":"#dcebd2"}},
+    {"id":"park","type":"fill","source":"protomaps","source-layer":"landuse","filter":["==","kind","park"],"paint":{"fill-color":"#d3e8c8"}},
     {"id":"water","type":"fill","source":"protomaps","source-layer":"water","paint":{"fill-color":"#a5d8f0"}},
     {"id":"buildings","type":"fill","source":"protomaps","source-layer":"buildings","minzoom":14,"paint":{"fill-color":"#e4e0d8"}},
 
-    {"id":"minor_casing","type":"line","source":"protomaps","source-layer":"roads","minzoom":13,"filter":["==",["get","kind"],"minor_road"],"paint":{"line-color":"#cfcabf","line-width":["interpolate",["linear"],["zoom"],13,1.8,18,15]}},
-    {"id":"major_casing","type":"line","source":"protomaps","source-layer":"roads","minzoom":8,"filter":["==",["get","kind"],"major_road"],"paint":{"line-color":"#d9b65a","line-width":["interpolate",["linear"],["zoom"],8,1.2,12,3.5,18,19]}},
-    {"id":"highway_casing","type":"line","source":"protomaps","source-layer":"roads","minzoom":5,"filter":["==",["get","kind"],"highway"],"paint":{"line-color":"#d98a1f","line-width":["interpolate",["linear"],["zoom"],5,1.2,10,3.5,14,7,18,24]}},
+    {"id":"minor_casing","type":"line","source":"protomaps","source-layer":"roads","minzoom":13,"filter":["==","kind","minor_road"],"paint":{"line-color":"#cfcabf","line-width":{"stops":[[13,1.8],[18,15]]}}},
+    {"id":"major_casing","type":"line","source":"protomaps","source-layer":"roads","minzoom":8,"filter":["==","kind","major_road"],"paint":{"line-color":"#d9b65a","line-width":{"stops":[[8,1.2],[12,3.5],[18,19]]}}},
+    {"id":"highway_casing","type":"line","source":"protomaps","source-layer":"roads","minzoom":5,"filter":["==","kind","highway"],"paint":{"line-color":"#d98a1f","line-width":{"stops":[[5,1.2],[10,3.5],[14,7],[18,24]]}}},
 
-    {"id":"minor","type":"line","source":"protomaps","source-layer":"roads","minzoom":13,"filter":["==",["get","kind"],"minor_road"],"paint":{"line-color":"#ffffff","line-width":["interpolate",["linear"],["zoom"],13,1,18,12]}},
-    {"id":"major","type":"line","source":"protomaps","source-layer":"roads","minzoom":8,"filter":["==",["get","kind"],"major_road"],"paint":{"line-color":"#ffe08a","line-width":["interpolate",["linear"],["zoom"],8,0.7,12,2.5,18,16]}},
-    {"id":"highway","type":"line","source":"protomaps","source-layer":"roads","minzoom":5,"filter":["==",["get","kind"],"highway"],"paint":{"line-color":"#ffb84d","line-width":["interpolate",["linear"],["zoom"],5,0.7,10,2.5,14,5,18,20]}},
-    {"id":"rail","type":"line","source":"protomaps","source-layer":"roads","minzoom":10,"filter":["==",["get","kind"],"rail"],"paint":{"line-color":"#b0aaa0","line-width":1}},
+    {"id":"minor","type":"line","source":"protomaps","source-layer":"roads","minzoom":13,"filter":["==","kind","minor_road"],"paint":{"line-color":"#ffffff","line-width":{"stops":[[13,1],[18,12]]}}},
+    {"id":"major","type":"line","source":"protomaps","source-layer":"roads","minzoom":8,"filter":["==","kind","major_road"],"paint":{"line-color":"#ffe08a","line-width":{"stops":[[8,0.7],[12,2.5],[18,16]]}}},
+    {"id":"highway","type":"line","source":"protomaps","source-layer":"roads","minzoom":5,"filter":["==","kind","highway"],"paint":{"line-color":"#ffb84d","line-width":{"stops":[[5,0.7],[10,2.5],[14,5],[18,20]]}}},
+    {"id":"rail","type":"line","source":"protomaps","source-layer":"roads","minzoom":10,"filter":["==","kind","rail"],"paint":{"line-color":"#b0aaa0","line-width":1}},
 
-    {"id":"road_names","type":"symbol","source":"protomaps","source-layer":"roads","minzoom":14,"layout":{"symbol-placement":"line","text-field":["get","name"],"text-size":11},"paint":{"text-color":"#555555","text-halo-color":"#ffffff","text-halo-width":1.5}},
-    {"id":"region","type":"symbol","source":"protomaps","source-layer":"places","minzoom":5,"maxzoom":9,"filter":["==",["get","kind"],"region"],"layout":{"text-field":["get","name"],"text-size":12},"paint":{"text-color":"#777777","text-halo-color":"#ffffff","text-halo-width":1.5}},
-    {"id":"locality","type":"symbol","source":"protomaps","source-layer":"places","minzoom":6,"filter":["==",["get","kind"],"locality"],"layout":{"text-field":["get","name"],"text-size":["interpolate",["linear"],["zoom"],6,11,14,18]},"paint":{"text-color":"#222222","text-halo-color":"#ffffff","text-halo-width":2}},
-    {"id":"neighbourhood","type":"symbol","source":"protomaps","source-layer":"places","minzoom":13,"filter":["==",["get","kind"],"neighbourhood"],"layout":{"text-field":["get","name"],"text-size":12},"paint":{"text-color":"#666666","text-halo-color":"#ffffff","text-halo-width":1.5}},
-    {"id":"pois","type":"symbol","source":"protomaps","source-layer":"pois","minzoom":16,"layout":{"text-field":["get","name"],"text-size":11},"paint":{"text-color":"#8a5a2b","text-halo-color":"#ffffff","text-halo-width":1.5}}
+    {"id":"road_names","type":"symbol","source":"protomaps","source-layer":"roads","minzoom":14,"layout":{"symbol-placement":"line","text-field":"{name}","text-size":11},"paint":{"text-color":"#555555","text-halo-color":"#ffffff","text-halo-width":1.5}},
+    {"id":"region","type":"symbol","source":"protomaps","source-layer":"places","minzoom":5,"maxzoom":9,"filter":["==","kind","region"],"layout":{"text-field":"{name}","text-size":12},"paint":{"text-color":"#777777","text-halo-color":"#ffffff","text-halo-width":1.5}},
+    {"id":"locality","type":"symbol","source":"protomaps","source-layer":"places","minzoom":6,"filter":["==","kind","locality"],"layout":{"text-field":"{name}","text-size":{"stops":[[6,11],[14,18]]}},"paint":{"text-color":"#222222","text-halo-color":"#ffffff","text-halo-width":2}},
+    {"id":"neighbourhood","type":"symbol","source":"protomaps","source-layer":"places","minzoom":13,"filter":["==","kind","neighbourhood"],"layout":{"text-field":"{name}","text-size":12},"paint":{"text-color":"#666666","text-halo-color":"#ffffff","text-halo-width":1.5}},
+    {"id":"pois","type":"symbol","source":"protomaps","source-layer":"pois","minzoom":16,"layout":{"text-field":"{name}","text-size":11},"paint":{"text-color":"#8a5a2b","text-halo-color":"#ffffff","text-halo-width":1.5}}
   ]
 }
 ''';
