@@ -1,0 +1,43 @@
+name: Build route data
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y osmium-tool
+          pip install osmium numpy scipy
+      - name: Download Vietnam OSM data
+        run: |
+          curl -L --fail --retry 3 -o vietnam.osm.pbf https://download.geofabrik.de/asia/vietnam-latest.osm.pbf
+          ls -lh vietnam.osm.pbf
+      - name: Cut southern Vietnam
+        run: |
+          osmium extract -b 103.4,8.3,109.5,12.3 --overwrite -o south.osm.pbf vietnam.osm.pbf
+          osmium tags-filter --overwrite -o roads.osm.pbf south.osm.pbf w/highway
+          osmium tags-filter --overwrite -o named.osm.pbf south.osm.pbf nw/name
+          ls -lh south.osm.pbf roads.osm.pbf named.osm.pbf
+      - name: Build routing graph
+        run: python tools/build_data.py roads roads.osm.pbf graph.bin
+      - name: Build search index
+        run: python tools/build_data.py search named.osm.pbf search.tsv
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -lh graph.bin search.tsv
+          gh release delete route-data --yes --cleanup-tag || true
+          gh release create route-data graph.bin search.tsv --title "Route data" --notes "Offline routing and search data"
