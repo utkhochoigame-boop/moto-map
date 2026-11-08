@@ -11,8 +11,26 @@ import 'package:vector_map_tiles_pmtiles/vector_map_tiles_pmtiles.dart';
 import 'package:vector_tile_renderer/vector_tile_renderer.dart'
     show ThemeReader;
 
+import 'engine.dart';
+
 const mapUrl =
     'https://github.com/utkhochoigame-boop/moto-map/releases/download/map-data/vietnam.pmtiles';
+const routeBase =
+    'https://github.com/utkhochoigame-boop/moto-map/releases/download/route-data';
+
+class DataFile {
+  final String name, label, url;
+  final int minBytes;
+  const DataFile(this.name, this.label, this.url, this.minBytes);
+}
+
+const mapFile =
+    DataFile('vietnam.pmtiles', 'Bản đồ', mapUrl, 20 * 1024 * 1024);
+const graphFile =
+    DataFile('graph.bin', 'Dữ liệu đường đi', '$routeBase/graph.bin', 100 * 1024);
+const searchFile = DataFile(
+    'search.tsv', 'Dữ liệu tìm kiếm', '$routeBase/search.tsv', 50 * 1024);
+const allFiles = [mapFile, graphFile, searchFile];
 
 // Giao diện bản đồ cho dữ liệu Protomaps v4
 const _styleJson = r'''
@@ -61,6 +79,8 @@ class MotoMapApp extends StatelessWidget {
   }
 }
 
+enum Phase { checking, needDownload, downloading, loading, ready }
+
 class Gate extends StatefulWidget {
   const Gate({super.key});
   @override
@@ -68,12 +88,16 @@ class Gate extends StatefulWidget {
 }
 
 class _GateState extends State<Gate> {
-  String? _path;
-  bool _checking = true;
-  bool _downloading = false;
-  double _progress = 0;
-  int _gotMb = 0;
+  Phase _phase = Phase.checking;
+  List<DataFile> _missing = [];
+  RoadGraph? _graph;
+  SearchIndex? _index;
+  String? _mapPath;
   String? _error;
+  String _curLabel = '';
+  int _curIndex = 0;
+  int _gotMb = 0;
+  double _progress = 0;
 
   @override
   void initState() {
@@ -81,38 +105,86 @@ class _GateState extends State<Gate> {
     _check();
   }
 
-  Future<File> _file() async {
-    final dir = await getApplicationSupportDirectory();
-    return File('${dir.path}/vietnam.pmtiles');
-  }
-
-  Future<void> _check() async {
-    final f = await _file();
-    final ok = await f.exists() && await f.length() > 20 * 1024 * 1024;
-    if (!mounted) return;
+  Future<void> _check({String? error}) async {
     setState(() {
-      _checking = false;
-      if (ok) _path = f.path;
+      _phase = Phase.checking;
+      _error = error;
     });
+    final dir = await getApplicationSupportDirectory();
+    final missing = <DataFile>[];
+    for (final f in allFiles) {
+      final file = File('${dir.path}/${f.name}');
+      if (!await file.exists() || await file.length() < f.minBytes) {
+        missing.add(f);
+      }
+    }
+    if (!mounted) return;
+    if (missing.isNotEmpty) {
+      setState(() {
+        _missing = missing;
+        _phase = Phase.needDownload;
+      });
+      return;
+    }
+    setState(() => _phase = Phase.loading);
+    try {
+      final graph = await RoadGraph.load('${dir.path}/${graphFile.name}');
+      final index = await SearchIndex.load('${dir.path}/${searchFile.name}');
+      if (!mounted) return;
+      setState(() {
+        _graph = graph;
+        _index = index;
+        _mapPath = '${dir.path}/${mapFile.name}';
+        _phase = Phase.ready;
+      });
+    } catch (e) {
+      for (final f in [graphFile, searchFile]) {
+        try {
+          await File('${dir.path}/${f.name}').delete();
+        } catch (_) {}
+      }
+      if (mounted) await _check(error: 'Dữ liệu bị lỗi, hãy tải lại: $e');
+    }
   }
 
-  Future<void> _download() async {
+  Future<void> _downloadAll() async {
     setState(() {
-      _downloading = true;
+      _phase = Phase.downloading;
       _error = null;
-      _progress = 0;
+    });
+    try {
+      final dir = await getApplicationSupportDirectory();
+      for (var i = 0; i < _missing.length; i++) {
+        await _downloadOne(dir, _missing[i], i);
+      }
+      await _check();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Tải lỗi: $e';
+          _phase = Phase.needDownload;
+        });
+      }
+    }
+  }
+
+  Future<void> _downloadOne(Directory dir, DataFile f, int index) async {
+    setState(() {
+      _curLabel = f.label;
+      _curIndex = index;
       _gotMb = 0;
+      _progress = 0;
     });
     final client = HttpClient();
+    final target = File('${dir.path}/${f.name}');
+    final part = File('${target.path}.part');
     try {
-      final f = await _file();
-      final req = await client.getUrl(Uri.parse(mapUrl));
+      final req = await client.getUrl(Uri.parse(f.url));
       final res = await req.close();
       if (res.statusCode != 200) {
-        throw 'Máy chủ trả về mã ${res.statusCode}';
+        throw '${f.label}: máy chủ trả về mã ${res.statusCode}';
       }
       final total = res.contentLength;
-      final part = File('${f.path}.part');
       final sink = part.openWrite();
       var got = 0;
       var lastUi = 0;
@@ -131,21 +203,13 @@ class _GateState extends State<Gate> {
       }
       await sink.flush();
       await sink.close();
-      if (await f.exists()) await f.delete();
-      await part.rename(f.path);
-      if (mounted) {
-        setState(() {
-          _path = f.path;
-          _downloading = false;
-        });
-      }
+      if (await target.exists()) await target.delete();
+      await part.rename(target.path);
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = 'Tải lỗi: $e';
-          _downloading = false;
-        });
-      }
+      try {
+        if (await part.exists()) await part.delete();
+      } catch (_) {}
+      rethrow;
     } finally {
       client.close();
     }
@@ -153,10 +217,30 @@ class _GateState extends State<Gate> {
 
   @override
   Widget build(BuildContext context) {
-    if (_checking) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    switch (_phase) {
+      case Phase.checking:
+        return const Scaffold(
+            body: Center(child: CircularProgressIndicator()));
+      case Phase.loading:
+        return const Scaffold(
+          body: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('Đang nạp dữ liệu đường đi và tìm kiếm...'),
+              ],
+            ),
+          ),
+        );
+      case Phase.ready:
+        return MapPage(path: _mapPath!, graph: _graph!, index: _index!);
+      case Phase.needDownload:
+      case Phase.downloading:
+        break;
     }
-    if (_path != null) return MapPage(path: _path!);
+    final downloading = _phase == Phase.downloading;
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -166,24 +250,25 @@ class _GateState extends State<Gate> {
             children: [
               const Icon(Icons.map, size: 72),
               const SizedBox(height: 16),
-              const Text('Tải bản đồ miền Nam để dùng offline',
+              const Text('Cần tải dữ liệu để dùng offline',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                   textAlign: TextAlign.center),
               const SizedBox(height: 8),
-              const Text(
-                  'Dung lượng vài trăm MB. Nên dùng wifi, giữ màn hình sáng và để app mở cho đến khi tải xong.',
+              Text(
+                  'Cần tải: ${_missing.map((e) => e.label).join(', ')}.\nNên dùng wifi, giữ màn hình sáng và để app mở cho đến khi tải xong.',
                   textAlign: TextAlign.center),
               const SizedBox(height: 24),
-              if (_downloading) ...[
+              if (downloading) ...[
                 LinearProgressIndicator(value: _progress > 0 ? _progress : null),
                 const SizedBox(height: 8),
-                Text('Đã tải $_gotMb MB'
+                Text('(${_curIndex + 1}/${_missing.length}) $_curLabel: '
+                    '$_gotMb MB'
                     '${_progress > 0 ? ' (${(_progress * 100).round()}%)' : ''}'),
               ] else
                 FilledButton.icon(
-                  onPressed: _download,
+                  onPressed: _downloadAll,
                   icon: const Icon(Icons.download),
-                  label: const Text('Tải bản đồ'),
+                  label: const Text('Tải xuống'),
                 ),
               if (_error != null) ...[
                 const SizedBox(height: 16),
@@ -197,9 +282,89 @@ class _GateState extends State<Gate> {
   }
 }
 
+String catLabel(String c) {
+  const m = {
+    'street': 'Đường',
+    'cafe': 'Quán cà phê',
+    'restaurant': 'Nhà hàng',
+    'fast_food': 'Quán ăn nhanh',
+    'fuel': 'Trạm xăng',
+    'hospital': 'Bệnh viện',
+    'clinic': 'Phòng khám',
+    'pharmacy': 'Nhà thuốc',
+    'bank': 'Ngân hàng',
+    'atm': 'ATM',
+    'school': 'Trường học',
+    'university': 'Đại học',
+    'marketplace': 'Chợ',
+    'supermarket': 'Siêu thị',
+    'convenience': 'Cửa hàng tiện lợi',
+    'hotel': 'Khách sạn',
+    'park': 'Công viên',
+    'place_of_worship': 'Nơi thờ tự',
+    'police': 'Công an',
+    'suburb': 'Phường / khu vực',
+    'quarter': 'Khu phố',
+    'neighbourhood': 'Khu dân cư',
+    'city': 'Thành phố',
+    'town': 'Thị xã / thị trấn',
+    'village': 'Làng / xã',
+    'hamlet': 'Ấp',
+    'station': 'Nhà ga / bến xe',
+    'parking': 'Bãi đỗ xe',
+    'building': 'Tòa nhà',
+    'cinema': 'Rạp phim',
+    'mall': 'Trung tâm thương mại',
+  };
+  return m[c] ?? c;
+}
+
+IconData catIcon(String c) {
+  switch (c) {
+    case 'street':
+      return Icons.add_road;
+    case 'cafe':
+      return Icons.local_cafe;
+    case 'restaurant':
+    case 'fast_food':
+      return Icons.restaurant;
+    case 'fuel':
+      return Icons.local_gas_station;
+    case 'hospital':
+    case 'clinic':
+    case 'pharmacy':
+      return Icons.local_hospital;
+    case 'city':
+    case 'town':
+    case 'village':
+    case 'suburb':
+    case 'quarter':
+    case 'neighbourhood':
+    case 'hamlet':
+      return Icons.location_city;
+    default:
+      return Icons.place;
+  }
+}
+
+String fmtDist(double m) =>
+    m < 1000 ? '${m.round()} m' : '${(m / 1000).toStringAsFixed(1)} km';
+
+String fmtTime(double s) {
+  final min = (s / 60).round();
+  if (min < 60) return '$min phút';
+  return '${min ~/ 60} giờ ${min % 60} phút';
+}
+
 class MapPage extends StatefulWidget {
   final String path;
-  const MapPage({super.key, required this.path});
+  final RoadGraph graph;
+  final SearchIndex index;
+  const MapPage(
+      {super.key,
+      required this.path,
+      required this.graph,
+      required this.index});
   @override
   State<MapPage> createState() => _MapPageState();
 }
@@ -210,10 +375,20 @@ class _MapPageState extends State<MapPage> {
       PmTilesVectorTileProvider.fromSource(widget.path);
   final _theme =
       ThemeReader().read(jsonDecode(_styleJson) as Map<String, dynamic>);
+  final TextEditingController _text = TextEditingController();
+  final FocusNode _focus = FocusNode();
+  Timer? _debounce;
   StreamSubscription<Position>? _sub;
   LatLng? _me;
   bool _followed = false;
   String _status = 'Đang lấy vị trí...';
+
+  List<GeoPlace> _results = [];
+  LatLng _searchCenter = const LatLng(10.8, 106.7);
+  Pt? _dest;
+  String _destName = '';
+  RouteResult? _route;
+  bool _routing = false;
 
   @override
   void initState() {
@@ -249,7 +424,7 @@ class _MapPageState extends State<MapPage> {
       final point = LatLng(p.latitude, p.longitude);
       setState(() {
         _me = point;
-        _status = 'Bản đồ offline | GPS ~${p.accuracy.round()} m';
+        _status = 'Offline | GPS ~${p.accuracy.round()} m | Nhấn giữ bản đồ để chọn điểm đến';
       });
       if (!_followed) {
         _followed = true;
@@ -258,23 +433,225 @@ class _MapPageState extends State<MapPage> {
     });
   }
 
+  LatLng _center() {
+    try {
+      return _controller.camera.center;
+    } catch (_) {
+      return _me ?? const LatLng(10.8, 106.7);
+    }
+  }
+
+  void _onQuery(String v) {
+    _debounce?.cancel();
+    if (v.trim().length < 2) {
+      setState(() => _results = []);
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 200), () {
+      final c = _center();
+      final r = widget.index.search(v, c.latitude, c.longitude);
+      if (mounted) {
+        setState(() {
+          _searchCenter = c;
+          _results = r;
+        });
+      }
+    });
+  }
+
+  void _setDest(Pt p, String name) {
+    setState(() {
+      _dest = p;
+      _destName = name;
+      _route = null;
+      _results = [];
+    });
+  }
+
+  void _selectPlace(GeoPlace p) {
+    _focus.unfocus();
+    _text.text = p.name;
+    _setDest(Pt(p.lat, p.lon), p.name);
+    _controller.move(LatLng(p.lat, p.lon), 16);
+  }
+
+  void _clearDest() {
+    _text.clear();
+    setState(() {
+      _dest = null;
+      _route = null;
+      _results = [];
+    });
+  }
+
+  void _snack(String msg) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _computeRoute() async {
+    final d = _dest;
+    final me = _me;
+    if (d == null) return;
+    if (me == null) {
+      _snack('Chưa có vị trí GPS, hãy bật GPS và đợi vài giây');
+      return;
+    }
+    setState(() => _routing = true);
+    await Future.delayed(const Duration(milliseconds: 80));
+    try {
+      final r = widget.graph.route(Pt(me.latitude, me.longitude), d);
+      if (!mounted) return;
+      setState(() => _route = r);
+      var minLat = 90.0, maxLat = -90.0, minLon = 180.0, maxLon = -180.0;
+      for (final p in r.points) {
+        if (p.lat < minLat) minLat = p.lat;
+        if (p.lat > maxLat) maxLat = p.lat;
+        if (p.lon < minLon) minLon = p.lon;
+        if (p.lon > maxLon) maxLon = p.lon;
+      }
+      _controller.fitCamera(CameraFit.bounds(
+        bounds: LatLngBounds(LatLng(minLat, minLon), LatLng(maxLat, maxLon)),
+        padding: const EdgeInsets.fromLTRB(40, 180, 40, 220),
+      ));
+    } on RouteException catch (e) {
+      _snack(e.message);
+    } catch (e) {
+      _snack('Lỗi tính đường: $e');
+    } finally {
+      if (mounted) setState(() => _routing = false);
+    }
+  }
+
   @override
   void dispose() {
+    _debounce?.cancel();
     _sub?.cancel();
+    _text.dispose();
+    _focus.dispose();
     super.dispose();
+  }
+
+  Widget _searchBar() {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: TextField(
+        controller: _text,
+        focusNode: _focus,
+        textInputAction: TextInputAction.search,
+        onChanged: _onQuery,
+        decoration: InputDecoration(
+          hintText: 'Tìm địa điểm, tên đường, hẻm...',
+          prefixIcon: const Icon(Icons.search),
+          suffixIcon: _text.text.isEmpty && _dest == null
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: _clearDest,
+                ),
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(vertical: 14),
+        ),
+      ),
+    );
+  }
+
+  Widget _resultsList() {
+    return Card(
+      margin: const EdgeInsets.only(top: 4),
+      clipBehavior: Clip.antiAlias,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 330),
+        child: ListView.builder(
+          shrinkWrap: true,
+          padding: EdgeInsets.zero,
+          itemCount: _results.length,
+          itemBuilder: (context, i) {
+            final p = _results[i];
+            final km = distMeters(
+                    Pt(p.lat, p.lon),
+                    Pt(_searchCenter.latitude, _searchCenter.longitude)) /
+                1000;
+            return ListTile(
+              dense: true,
+              leading: Icon(catIcon(p.cat)),
+              title: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+              subtitle: Text('${catLabel(p.cat)} • ${km.toStringAsFixed(1)} km'),
+              onTap: () => _selectPlace(p),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _panel() {
+    final r = _route;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_destName,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            if (r != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                    '${fmtDist(r.meters)} • ${fmtTime(r.seconds)} (xe máy, ước tính)'),
+              ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                if (_routing)
+                  const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 3))
+                else
+                  FilledButton.icon(
+                    onPressed: _computeRoute,
+                    icon: const Icon(Icons.directions),
+                    label: Text(r == null ? 'Chỉ đường' : 'Tính lại'),
+                  ),
+                const SizedBox(width: 8),
+                TextButton(onPressed: _clearDest, child: const Text('Xóa')),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final dest = _dest;
+    final route = _route;
     return Scaffold(
       body: Stack(
         children: [
           FlutterMap(
             mapController: _controller,
-            options: const MapOptions(
-              initialCenter: LatLng(10.8, 106.7),
+            options: MapOptions(
+              initialCenter: const LatLng(10.8, 106.7),
               initialZoom: 8,
               maxZoom: 18,
+              onTap: (tapPosition, point) {
+                _focus.unfocus();
+                if (_results.isNotEmpty) setState(() => _results = []);
+              },
+              onLongPress: (tapPosition, point) {
+                _focus.unfocus();
+                _text.clear();
+                _setDest(Pt(point.latitude, point.longitude),
+                    'Điểm đã chọn trên bản đồ');
+              },
             ),
             children: [
               FutureBuilder<PmTilesVectorTileProvider>(
@@ -287,8 +664,22 @@ class _MapPageState extends State<MapPage> {
                   );
                 },
               ),
-              if (_me != null)
-                MarkerLayer(markers: [
+              if (route != null)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: route.points
+                          .map((p) => LatLng(p.lat, p.lon))
+                          .toList(),
+                      strokeWidth: 6,
+                      color: Colors.blue,
+                      borderStrokeWidth: 2,
+                      borderColor: Colors.white,
+                    ),
+                  ],
+                ),
+              MarkerLayer(markers: [
+                if (_me != null)
                   Marker(
                     point: _me!,
                     width: 44,
@@ -296,20 +687,58 @@ class _MapPageState extends State<MapPage> {
                     child: const Icon(Icons.navigation,
                         color: Colors.blue, size: 40),
                   ),
-                ]),
+                if (dest != null)
+                  Marker(
+                    point: LatLng(dest.lat, dest.lon),
+                    width: 44,
+                    height: 44,
+                    child: Transform.translate(
+                      offset: const Offset(0, -20),
+                      child: const Icon(Icons.location_on,
+                          color: Colors.red, size: 44),
+                    ),
+                  ),
+              ]),
             ],
           ),
           SafeArea(
             child: Align(
               alignment: Alignment.topCenter,
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Text(_status),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _searchBar(),
+                    if (_results.isNotEmpty)
+                      _resultsList()
+                    else
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Card(
+                          margin: EdgeInsets.zero,
+                          child: Padding(
+                            padding: const EdgeInsets.all(8),
+                            child: Text(_status),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ),
           ),
+          if (dest != null)
+            SafeArea(
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 88, 12),
+                  child: _panel(),
+                ),
+              ),
+            ),
         ],
       ),
       floatingActionButton: FloatingActionButton(
